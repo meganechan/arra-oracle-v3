@@ -192,8 +192,21 @@ class OracleMCPServer {
         this.vectorStatus = 'connected';
         console.error(`[VectorDB:${this.vectorStore.name}] ✓ oracle_knowledge: ${stats.count} documents`);
       } else {
-        this.vectorStatus = 'connected';
-        console.error(`[VectorDB:${this.vectorStore.name}] ✓ Connected but collection empty`);
+        // count===0 while the KB has documents = semantic search is DEAD (FTS-only).
+        // Surface this loudly + as 'unavailable' so muninn_stats shows it instead of
+        // hiding behind a reassuring "connected". This is the failure mode that hid
+        // for a month after the ChromaDB→LanceDB migration / a wiped reindex.
+        let docCount = 0;
+        try {
+          docCount = (this.sqlite?.prepare('SELECT COUNT(*) AS n FROM oracle_documents').get() as { n: number } | undefined)?.n ?? 0;
+        } catch {}
+        if (docCount > 0) {
+          this.vectorStatus = 'unavailable';
+          console.error(`[VectorDB:${this.vectorStore.name}] ⚠️  VECTOR INDEX EMPTY — 0 vectors but ${docCount} documents in KB. Semantic search disabled (FTS-only). Check dataPath/collection match + run reindex.`);
+        } else {
+          this.vectorStatus = 'connected';
+          console.error(`[VectorDB:${this.vectorStore.name}] ✓ Connected (KB empty — no documents yet)`);
+        }
       }
     } catch (e) {
       this.vectorStatus = 'unavailable';

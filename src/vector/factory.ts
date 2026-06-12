@@ -137,22 +137,27 @@ export function getEmbeddingModels(): Record<string, { collection: string; model
   const cfg = loadVectorConfig();
   if (cfg) return configToModels(cfg);
 
-  // Hardcoded fallback — always works even without config file
+  // Hardcoded fallback — always works even without config file.
+  // dataPath honors ORACLE_VECTOR_DB_PATH so the indexer (which passes preset.dataPath)
+  // resolves the SAME path the main reader does (createVectorStore: env || LANCEDB_DIR).
+  // Without this, a SET ORACLE_VECTOR_DB_PATH makes the reader use the env path while
+  // the indexer writes to LANCEDB_DIR → reader sees count=0, writer fills another dir.
+  const lanceDataPath = process.env.ORACLE_VECTOR_DB_PATH || LANCEDB_DIR;
   return {
     nomic: {
       collection: COLLECTION_NAME,
       model: 'nomic-embed-text',
-      dataPath: LANCEDB_DIR,
+      dataPath: lanceDataPath,
     },
     qwen3: {
       collection: 'oracle_knowledge_qwen3',
       model: 'qwen3-embedding',
-      dataPath: LANCEDB_DIR,
+      dataPath: lanceDataPath,
     },
     'bge-m3': {
       collection: 'oracle_knowledge_bge_m3',
       model: 'bge-m3',
-      dataPath: LANCEDB_DIR,
+      dataPath: lanceDataPath,
     },
   };
 }

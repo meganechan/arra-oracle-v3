@@ -68,6 +68,28 @@ export class LanceDBAdapter implements VectorStoreAdapter {
     }
   }
 
+  /**
+   * Re-open the table so reads pick up writes made by OTHER processes.
+   * LanceDB Table handles are pinned to the dataset version at open time, so a
+   * long-lived reader (the main server) never sees the indexer sidecar's
+   * deleteCollection()+reindex — it reports count=0 forever until restart.
+   * Re-opening resolves the latest version and the new table after a drop+recreate.
+   * Cheap (reads the manifest); safe to call on every read.
+   */
+  private async refreshTable(): Promise<void> {
+    if (!this.db) return;
+    try {
+      const names = await this.db.tableNames();
+      if (names.includes(this.collectionName)) {
+        this.table = await this.db.openTable(this.collectionName);
+      } else {
+        this.table = null;
+      }
+    } catch {
+      // transient failure — keep the existing handle rather than going blind
+    }
+  }
+
   async addDocuments(docs: VectorDocument[]): Promise<void> {
     if (docs.length === 0) return;
     if (!this.table) await this.ensureCollection();
@@ -103,6 +125,7 @@ export class LanceDBAdapter implements VectorStoreAdapter {
   }
 
   async query(text: string, limit: number = 10, where?: Record<string, any>): Promise<VectorQueryResult> {
+    await this.refreshTable();              // see latest version written by the indexer sidecar
     if (!this.table) await this.ensureCollection();
 
     const [queryEmbedding] = await this.embedder.embed([text], 'query');
@@ -129,6 +152,7 @@ export class LanceDBAdapter implements VectorStoreAdapter {
   }
 
   async queryById(id: string, nResults: number = 5): Promise<VectorQueryResult> {
+    await this.refreshTable();
     if (!this.table) await this.ensureCollection();
 
     // Get the document's vector using filter query (not vector search)
@@ -151,18 +175,8 @@ export class LanceDBAdapter implements VectorStoreAdapter {
   }
 
   async getStats(): Promise<{ count: number }> {
-    if (!this.table) {
-      // Try to open existing table
-      if (this.db) {
-        try {
-          const tableNames = await this.db.tableNames();
-          if (tableNames.includes(this.collectionName)) {
-            this.table = await this.db.openTable(this.collectionName);
-          }
-        } catch {}
-      }
-      if (!this.table) return { count: 0 };
-    }
+    await this.refreshTable();              // count the latest version, not a pinned handle
+    if (!this.table) return { count: 0 };
     try {
       const count = await this.table.countRows();
       return { count };
