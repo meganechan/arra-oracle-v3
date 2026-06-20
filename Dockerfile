@@ -1,8 +1,12 @@
 # Deploy image for fleet-kb (Coolify). Additive deploy-infra — does not change app code.
-# muninn runs TS directly via Bun; bun:sqlite is built-in, @lancedb/lancedb ships prebuilt
-# linux-x64-gnu binaries, pg is pure JS — so no compile toolchain needed.
+# Build tools needed: better-sqlite3 compiles via node-gyp (python3/make/g++);
+# @lancedb/lancedb + sqlite-vec use prebuilt binaries. bun:sqlite is built-in.
 FROM oven/bun:1-slim
 WORKDIR /app
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
