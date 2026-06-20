@@ -17,7 +17,7 @@ import { Database } from 'bun:sqlite';
 import * as schema from './db/schema.ts';
 import { createDatabase } from './db/index.ts';
 import { createVectorStore } from './vector/factory.ts';
-import type { VectorStoreAdapter } from './vector/types.ts';
+import type { VectorStoreAdapter, VectorDBType } from './vector/types.ts';
 import path from 'path';
 import fs from 'fs';
 import { loadToolGroupConfig, getDisabledTools, watchToolGroupConfig, type ToolGroupConfig } from './config/tool-groups.ts';
@@ -136,7 +136,8 @@ class OracleMCPServer {
     }
 
     this.vectorStore = createVectorStore({
-      type: 'lancedb',
+      // Honor ORACLE_VECTOR_DB (e.g. pgvector); defaults to lancedb when unset.
+      type: (process.env.ORACLE_VECTOR_DB as VectorDBType) || 'lancedb',
       collectionName: 'oracle_knowledge_bge_m3',
       embeddingProvider: 'ollama',
       embeddingModel: 'bge-m3',
