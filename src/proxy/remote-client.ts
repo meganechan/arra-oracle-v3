@@ -178,7 +178,10 @@ export class RemoteClient {
 
   async supersede(input: OracleSupersededInput): Promise<ToolResponse> {
     try {
-      const data = await this.post('/api/supersede', {
+      // id-form write path (sets oracle_documents.superseded_by). The bare
+      // POST /api/supersede is the legacy log route (requires old_path) and does
+      // not touch superseded_by — using it here returned 400 for id-form callers.
+      const data = await this.post('/api/supersede/mark', {
         old_id: input.oldId,
         new_id: input.newId,
         reason: input.reason,
