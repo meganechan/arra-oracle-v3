@@ -251,6 +251,22 @@ export class PgVectorAdapter implements VectorStoreAdapter {
     };
   }
 
+  /**
+   * IDs already embedded in this collection — id-only, no vectors loaded, so it
+   * scales to a full-collection scan cheaply. Powers incremental backfill
+   * (embed only the docs this store is missing). Returns [] if the table is absent.
+   */
+  async existingIds(): Promise<string[]> {
+    try {
+      await this.ensureCollection();
+      const pool = this.getPool();
+      const { rows } = await pool.query(`SELECT id FROM ${this.table}`);
+      return rows.map((r) => r.id as string);
+    } catch {
+      return [];
+    }
+  }
+
   async getStats(): Promise<{ count: number }> {
     try {
       await this.ensureCollection();
