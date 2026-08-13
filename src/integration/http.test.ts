@@ -123,6 +123,45 @@ describe("HTTP API Integration", () => {
   });
 
   // ===================
+  // Supersede → search flag (remote-proxy path: MCP reads /api/search)
+  // ===================
+  describe("Supersede flag in search", () => {
+    const tag = `supersede-flag-probe-${Date.now()}`;
+    const learn = async (pattern: string) => {
+      const res = await fetch(`${BASE_URL}/api/learn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pattern, source: tag, concepts: [tag] }),
+      });
+      expect(res.ok).toBe(true);
+      return (await res.json()).id as string;
+    };
+
+    test("superseded doc comes back from /api/search carrying the flag", async () => {
+      const oldId = await learn(`${tag} old claim`);
+      const newId = await learn(`${tag} new claim`);
+
+      const mark = await fetch(`${BASE_URL}/api/supersede/mark`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ old_id: oldId, new_id: newId, reason: tag }),
+      });
+      expect(mark.ok).toBe(true);
+
+      const res = await fetch(`${BASE_URL}/api/search?q=${encodeURIComponent(tag)}&mode=fts&limit=10`);
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      const oldHit = data.results.find((r: any) => r.id === oldId);
+      const newHit = data.results.find((r: any) => r.id === newId);
+      expect(oldHit).toBeDefined();
+      expect(oldHit.superseded_by).toBe(newId);
+      expect(oldHit.superseded_reason).toBe(tag);
+      // P-001: still searchable, and the replacement is not flagged
+      expect(newHit?.superseded_by).toBeUndefined();
+    }, 30_000);
+  });
+
+  // ===================
   // List & Browse
   // ===================
   describe("List & Browse", () => {

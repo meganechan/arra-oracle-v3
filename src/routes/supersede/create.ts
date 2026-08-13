@@ -2,7 +2,9 @@
  * POST /api/supersede — append to legacy supersede_log table.
  *
  * Kept for backwards compatibility; the MCP write path populates
- * oracle_documents.superseded_by directly, not this table.
+ * oracle_documents.superseded_by directly, not this table. Callers that want the
+ * document actually flagged (and shown as such in search) want
+ * POST /api/supersede/mark — this route's 201 says "logged", nothing more.
  */
 
 import { Elysia } from 'elysia';
@@ -37,6 +39,10 @@ export const supersedeCreateEndpoint = new Elysia().post(
       return {
         id: result.id,
         message: 'Supersession logged',
+        // This route only appends to supersede_log; nothing reads that table and
+        // search flags come from oracle_documents.superseded_by. Say so, or a
+        // caller reads 201 as "the old doc is now closed" (it is not).
+        warning: 'Logged only — the document was NOT flagged. Use POST /api/supersede/mark with old_id/new_id to set superseded_by (what search shows).',
       };
     } catch (error) {
       set.status = 500;
