@@ -45,6 +45,12 @@ export interface VectorStoreAdapter {
   getStats(): Promise<{ count: number }>;
   getCollectionInfo(): Promise<{ count: number; name: string }>;
   getAllEmbeddings?(limit?: number): Promise<{ ids: string[]; embeddings: number[][]; metadatas: any[] }>;
+  /**
+   * IDs already stored in the collection (id-only, no vectors loaded). Enables
+   * incremental/non-destructive backfill — embed only docs the store is missing.
+   * Optional: backends that can't answer cheaply omit it (callers fall back).
+   */
+  existingIds?(): Promise<string[]>;
 }
 
 export type EmbedType = 'query' | 'passage';
@@ -60,5 +66,5 @@ export interface EmbeddingProvider {
   embed(texts: string[], type?: EmbedType): Promise<number[][]>;
 }
 
-export type VectorDBType = 'chroma' | 'sqlite-vec' | 'lancedb' | 'qdrant' | 'cloudflare-vectorize';
+export type VectorDBType = 'chroma' | 'sqlite-vec' | 'lancedb' | 'qdrant' | 'cloudflare-vectorize' | 'pgvector';
 export type EmbeddingProviderType = 'chromadb-internal' | 'ollama' | 'openai' | 'cloudflare-ai';

@@ -14,6 +14,7 @@ import { SqliteVecAdapter } from './adapters/sqlite-vec.ts';
 import { LanceDBAdapter } from './adapters/lancedb.ts';
 import { QdrantAdapter } from './adapters/qdrant.ts';
 import { CloudflareVectorizeAdapter, CloudflareAIEmbeddings } from './adapters/cloudflare-vectorize.ts';
+import { PgVectorAdapter } from './adapters/pgvector.ts';
 import { createEmbeddingProvider } from './embeddings.ts';
 import { loadVectorConfig, configToModels } from './config.ts';
 
@@ -101,6 +102,20 @@ export function createVectorStore(config: VectorStoreConfig = {}): VectorStoreAd
       });
     }
 
+    case 'pgvector': {
+      // Managed Postgres (fleet-pg / oracle_kb) + pgvector. Reuses the shared
+      // pool resolved from ORACLE_DATABASE_URL + DATABASE_CA_CERT (db/pg.ts).
+      const embeddingType = config.embeddingProvider
+        || (process.env.ORACLE_EMBEDDING_PROVIDER as EmbeddingProviderType)
+        || 'ollama';
+
+      const embeddingModel = config.embeddingModel
+        || process.env.ORACLE_EMBEDDING_MODEL;
+
+      const embedder = createEmbeddingProvider(embeddingType, embeddingModel);
+      return new PgVectorAdapter(collectionName, embedder);
+    }
+
     case 'cloudflare-vectorize': {
       const cfConfig = {
         accountId: config.cfAccountId || process.env.CLOUDFLARE_ACCOUNT_ID,
@@ -183,8 +198,10 @@ export function getVectorStoreByModel(model?: string): VectorStoreAdapter {
   let store = modelStoreCache.get(key);
   if (!store) {
     const preset = models[key];
+    // Honor ORACLE_VECTOR_DB so the model registry can target pgvector (or any
+    // backend); defaults to lancedb when unset → existing behavior unchanged.
     store = createVectorStore({
-      type: 'lancedb',
+      type: (process.env.ORACLE_VECTOR_DB as VectorDBType) || 'lancedb',
       collectionName: preset.collection,
       embeddingProvider: 'ollama',
       embeddingModel: preset.model,
