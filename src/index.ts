@@ -23,6 +23,7 @@ import fs from 'fs';
 import { loadToolGroupConfig, getDisabledTools, watchToolGroupConfig, type ToolGroupConfig } from './config/tool-groups.ts';
 import { ORACLE_DATA_DIR, DB_PATH, REPO_ROOT } from './config.ts';
 import { MCP_SERVER_NAME } from './const.ts';
+import { RemoteClient } from './proxy/remote-client.ts';
 
 // Tool handlers (all extracted to src/tools/)
 import type { ToolContext } from './tools/types.ts';
@@ -85,12 +86,20 @@ class OracleMCPServer {
   private version: string;
   private disabledTools: Set<string>;
   private stopToolGroupsWatch: (() => void) | null = null;
+  private remote: RemoteClient | null = null;
 
   constructor(options: { readOnly?: boolean; toolGroups?: ToolGroupConfig } = {}) {
     this.readOnly = options.readOnly ?? false;
     if (this.readOnly) {
       console.error('[Oracle] Running in READ-ONLY mode');
     }
+
+    const remoteUrl = process.env.ORACLE_REMOTE_URL;
+    if (remoteUrl) {
+      this.remote = new RemoteClient(remoteUrl);
+      console.error(`[Oracle] Remote proxy mode → ${remoteUrl}`);
+    }
+
     // Use safe REPO_ROOT from config.ts: never falls back to process.cwd(),
     // which would create parasitic ψ/ dirs in whatever directory the MCP
     // server was launched from. See #551.
@@ -135,14 +144,6 @@ class OracleMCPServer {
       }, this.repoRoot);
     }
 
-    this.vectorStore = createVectorStore({
-      // Honor ORACLE_VECTOR_DB (e.g. pgvector); defaults to lancedb when unset.
-      type: (process.env.ORACLE_VECTOR_DB as VectorDBType) || 'lancedb',
-      collectionName: 'oracle_knowledge_bge_m3',
-      embeddingProvider: 'ollama',
-      embeddingModel: 'bge-m3',
-    });
-
     const pkg = JSON.parse(fs.readFileSync(path.join(import.meta.dirname || __dirname, '..', 'package.json'), 'utf-8'));
     this.version = pkg.version;
     this.server = new Server(
@@ -150,9 +151,22 @@ class OracleMCPServer {
       { capabilities: { tools: {} } }
     );
 
-    const { sqlite, db } = createDatabase(DB_PATH);
-    this.sqlite = sqlite;
-    this.db = db;
+    if (this.remote) {
+      this.sqlite = null as any;
+      this.db = null as any;
+      this.vectorStore = null as any;
+    } else {
+      this.vectorStore = createVectorStore({
+        // Honor ORACLE_VECTOR_DB (e.g. pgvector); defaults to lancedb when unset.
+        type: (process.env.ORACLE_VECTOR_DB as VectorDBType) || 'lancedb',
+        collectionName: 'oracle_knowledge_bge_m3',
+        embeddingProvider: 'ollama',
+        embeddingModel: 'bge-m3',
+      });
+      const { sqlite, db } = createDatabase(DB_PATH);
+      this.sqlite = sqlite;
+      this.db = db;
+    }
 
     this.setupHandlers();
     this.setupErrorHandling();
@@ -172,6 +186,7 @@ class OracleMCPServer {
   }
 
   private async verifyVectorHealth(): Promise<void> {
+    if (this.remote) return;
     try {
       const stats = await this.vectorStore.getStats();
       if (stats.count > 0) {
@@ -199,6 +214,7 @@ class OracleMCPServer {
   }
 
   private async cleanup(): Promise<void> {
+    if (this.remote) return;
     this.sqlite.close();
     await this.vectorStore.close();
   }
@@ -264,56 +280,13 @@ class OracleMCPServer {
         };
       }
 
-      const ctx = this.toolCtx;
+      const args = request.params.arguments as any;
 
       try {
-        switch (request.params.name) {
-          // Core tools (delegated to src/tools/)
-          case 'muninn_search':
-            return await handleSearch(ctx, request.params.arguments as unknown as OracleSearchInput);
-          case 'muninn_read':
-            return await handleRead(ctx, request.params.arguments as unknown as OracleReadInput);
-          case 'muninn_learn':
-            return await handleLearn(ctx, request.params.arguments as unknown as OracleLearnInput);
-          case 'muninn_list':
-            return await handleList(ctx, request.params.arguments as unknown as OracleListInput);
-          case 'muninn_stats':
-            return await handleStats(ctx, request.params.arguments as unknown as OracleStatsInput);
-          case 'muninn_concepts':
-            return await handleConcepts(ctx, request.params.arguments as unknown as OracleConceptsInput);
-          case 'muninn_supersede':
-            return await handleSupersede(ctx, request.params.arguments as unknown as OracleSupersededInput);
-          case 'muninn_handoff':
-            return await handleHandoff(ctx, request.params.arguments as unknown as OracleHandoffInput);
-          case 'muninn_inbox':
-            return await handleInbox(ctx, request.params.arguments as unknown as OracleInboxInput);
-          // Forum tools (delegated to src/tools/forum.ts)
-          case 'muninn_thread':
-            return await handleThread(request.params.arguments as unknown as OracleThreadInput);
-          case 'muninn_threads':
-            return await handleThreads(request.params.arguments as unknown as OracleThreadsInput);
-          case 'muninn_thread_read':
-            return await handleThreadRead(request.params.arguments as unknown as OracleThreadReadInput);
-          case 'muninn_thread_update':
-            return await handleThreadUpdate(request.params.arguments as unknown as OracleThreadUpdateInput);
-
-          // Trace tools (delegated to src/tools/trace.ts)
-          case 'muninn_trace':
-            return await handleTrace(request.params.arguments as unknown as CreateTraceInput);
-          case 'muninn_trace_list':
-            return await handleTraceList(request.params.arguments as unknown as ListTracesInput);
-          case 'muninn_trace_get':
-            return await handleTraceGet(request.params.arguments as unknown as GetTraceInput);
-          case 'muninn_trace_link':
-            return await handleTraceLink(request.params.arguments as unknown as { prevTraceId: string; nextTraceId: string });
-          case 'muninn_trace_unlink':
-            return await handleTraceUnlink(request.params.arguments as unknown as { traceId: string; direction: 'prev' | 'next' });
-          case 'muninn_trace_chain':
-            return await handleTraceChain(request.params.arguments as unknown as { traceId: string });
-
-          default:
-            throw new Error(`Unknown tool: ${request.params.name}`);
+        if (this.remote) {
+          return await this.dispatchRemote(request.params.name, args);
         }
+        return await this.dispatchLocal(request.params.name, args);
       } catch (error) {
         return {
           content: [{
@@ -326,7 +299,100 @@ class OracleMCPServer {
     });
   }
 
+  private async dispatchLocal(name: string, args: any): Promise<any> {
+    const ctx = this.toolCtx;
+    switch (name) {
+      case 'muninn_search':
+        return handleSearch(ctx, args as OracleSearchInput);
+      case 'muninn_read':
+        return handleRead(ctx, args as OracleReadInput);
+      case 'muninn_learn':
+        return handleLearn(ctx, args as OracleLearnInput);
+      case 'muninn_list':
+        return handleList(ctx, args as OracleListInput);
+      case 'muninn_stats':
+        return handleStats(ctx, args as OracleStatsInput);
+      case 'muninn_concepts':
+        return handleConcepts(ctx, args as OracleConceptsInput);
+      case 'muninn_supersede':
+        return handleSupersede(ctx, args as OracleSupersededInput);
+      case 'muninn_handoff':
+        return handleHandoff(ctx, args as OracleHandoffInput);
+      case 'muninn_inbox':
+        return handleInbox(ctx, args as OracleInboxInput);
+      case 'muninn_thread':
+        return handleThread(args as OracleThreadInput);
+      case 'muninn_threads':
+        return handleThreads(args as OracleThreadsInput);
+      case 'muninn_thread_read':
+        return handleThreadRead(args as OracleThreadReadInput);
+      case 'muninn_thread_update':
+        return handleThreadUpdate(args as OracleThreadUpdateInput);
+      case 'muninn_trace':
+        return handleTrace(args as CreateTraceInput);
+      case 'muninn_trace_list':
+        return handleTraceList(args as ListTracesInput);
+      case 'muninn_trace_get':
+        return handleTraceGet(args as GetTraceInput);
+      case 'muninn_trace_link':
+        return handleTraceLink(args as { prevTraceId: string; nextTraceId: string });
+      case 'muninn_trace_unlink':
+        return handleTraceUnlink(args as { traceId: string; direction: 'prev' | 'next' });
+      case 'muninn_trace_chain':
+        return handleTraceChain(args as { traceId: string });
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
+  }
+
+  private async dispatchRemote(name: string, args: any): Promise<any> {
+    const r = this.remote!;
+    switch (name) {
+      case 'muninn_search':
+        return r.search(args);
+      case 'muninn_read':
+        return r.read(args);
+      case 'muninn_learn':
+        return r.learn(args);
+      case 'muninn_list':
+        return r.list(args);
+      case 'muninn_stats':
+        return r.stats();
+      case 'muninn_concepts':
+        return r.concepts(args);
+      case 'muninn_supersede':
+        return r.supersede(args);
+      case 'muninn_handoff':
+        return r.handoff(args);
+      case 'muninn_inbox':
+        return r.inbox(args);
+      case 'muninn_thread':
+        return r.thread(args);
+      case 'muninn_threads':
+        return r.threads(args);
+      case 'muninn_thread_read':
+        return r.threadRead(args);
+      case 'muninn_thread_update':
+        return r.threadUpdate(args);
+      case 'muninn_trace':
+        return r.trace(args);
+      case 'muninn_trace_list':
+        return r.traceList(args);
+      case 'muninn_trace_get':
+        return r.traceGet(args);
+      case 'muninn_trace_link':
+        return r.traceLink(args);
+      case 'muninn_trace_unlink':
+        return r.traceUnlink(args);
+      case 'muninn_trace_chain':
+        return r.traceChain(args);
+      default:
+        throw new Error(`Unknown tool: ${name}`);
+    }
+  }
+
   async preConnectVector(): Promise<void> {
+    if (this.remote) return;
     await this.vectorStore.connect();
   }
 
