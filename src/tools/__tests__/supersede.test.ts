@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import Database from 'bun:sqlite';
 import { drizzle } from 'drizzle-orm/bun-sqlite';
 import * as schema from '../../db/schema.ts';
-import { markSuperseded } from '../supersede.ts';
+import { markSuperseded, attachSupersedeFlags } from '../supersede.ts';
 import type { ToolContext } from '../types.ts';
 
 const DOCS_SCHEMA = `
@@ -90,5 +90,25 @@ describe('markSuperseded', () => {
   it('throws when new doc is missing', () => {
     insertDoc('old-4');
     expect(() => markSuperseded(db, { oldId: 'old-4', newId: 'nope' } as any)).toThrow(/New document not found/);
+  });
+});
+
+describe('attachSupersedeFlags', () => {
+  it('flags only superseded hits, leaves the rest untouched', () => {
+    insertDoc('old-a');
+    insertDoc('new-a');
+    const { supersededAt } = markSuperseded(db, { oldId: 'old-a', newId: 'new-a', reason: 'outdated' });
+
+    const results: Array<Record<string, any>> = [{ id: 'old-a' }, { id: 'new-a' }];
+    attachSupersedeFlags(sqlite, results);
+
+    expect(results[0].superseded_by).toBe('new-a');
+    expect(results[0].superseded_at).toBe(new Date(supersededAt).toISOString());
+    expect(results[0].superseded_reason).toBe('outdated');
+    expect(results[1].superseded_by).toBeUndefined();
+  });
+
+  it('no-ops on empty results (no SQL with an empty IN list)', () => {
+    expect(() => attachSupersedeFlags(sqlite, [])).not.toThrow();
   });
 });

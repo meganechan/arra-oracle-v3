@@ -15,6 +15,7 @@ import type { SearchResult, SearchResponse } from './types.ts';
 import { ensureVectorStoreConnected, EMBEDDING_MODELS } from '../vector/factory.ts';
 import { detectProject } from './project-detect.ts';
 import { coerceConcepts } from '../tools/learn.ts';
+import { attachSupersedeFlags } from '../tools/supersede.ts';
 import { createVectorProxy } from './vector-proxy.ts';
 
 // Module-level proxy instance — bound to VECTOR_URL at boot. If VECTOR_URL is
@@ -253,6 +254,10 @@ export async function handleSearch(
 
   // Apply pagination
   const results = combined.slice(offset, offset + limit);
+
+  // Flag superseded hits — this is the search the remote-proxy MCP path reads,
+  // so without it muninn_supersede's write is invisible to muninn_search.
+  attachSupersedeFlags(sqlite, results);
 
   // Log search
   const searchTime = Date.now() - startTime;

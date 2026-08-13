@@ -12,6 +12,10 @@ export interface SearchResult {
   score?: number;
   distance?: number;
   model?: string;
+  // Set only on superseded docs (P-001: they stay searchable, flagged)
+  superseded_by?: string;
+  superseded_at?: string;
+  superseded_reason?: string | null;
 }
 
 export interface SearchResponse {

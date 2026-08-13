@@ -71,6 +71,41 @@ export function markSuperseded(
   return { oldType: oldDoc.type, newType: newDoc.type, supersededAt: now };
 }
 
+/**
+ * Attach superseded_by/at/reason to search hits (P-001 "Nothing is Deleted" —
+ * superseded docs remain searchable; callers need the flag to decide whether to
+ * follow the replacement pointer). Shared by the MCP-local search (tools/search)
+ * and the HTTP search handler, which is what the remote-proxy MCP path reads —
+ * without it a superseded doc comes back over ORACLE_REMOTE_URL with no flag.
+ */
+export function attachSupersedeFlags(
+  sqlite: ToolContext['sqlite'],
+  results: Array<Record<string, any>>,
+): void {
+  if (results.length === 0) return;
+  const ids = results.map(r => r.id as string);
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = sqlite.prepare(`
+    SELECT id, superseded_by, superseded_at, superseded_reason
+    FROM oracle_documents
+    WHERE id IN (${placeholders}) AND superseded_by IS NOT NULL
+  `).all(...ids) as Array<{
+    id: string;
+    superseded_by: string;
+    superseded_at: number;
+    superseded_reason: string | null;
+  }>;
+  const byId = new Map(rows.map(r => [r.id, r]));
+  for (const r of results) {
+    const s = byId.get(r.id as string);
+    if (s) {
+      r.superseded_by = s.superseded_by;
+      r.superseded_at = new Date(s.superseded_at).toISOString();
+      r.superseded_reason = s.superseded_reason;
+    }
+  }
+}
+
 export async function handleSupersede(ctx: ToolContext, input: OracleSupersededInput): Promise<ToolResponse> {
   const { oldId, newId, reason } = input;
   const { oldType, newType, supersededAt } = markSuperseded(ctx.db, input);
